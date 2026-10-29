@@ -9,6 +9,7 @@ typedef enum {
     TYPE_BRANCH,
     TYPE_MATRIX,
     TYPE_MATRIX_OPERATION,
+    TYPE_RAW,
 } DataType;
 
 typedef struct {
@@ -37,6 +38,14 @@ typedef struct {
     struct ObjectNode* node;
 } Branch;
 
+typedef struct {
+    u8*   data;
+    u32   size;
+    u32   refCount;
+    char** refName;
+    u32*  refPos;
+} Raw;
+
 typedef struct DataNode {
     struct DataNode* prev;
     struct DataNode* next;
@@ -47,6 +56,7 @@ typedef struct DataNode {
         Dictionary      dict;
         Branch branch;
         Matrix mtx;
+        Raw    raw;
         void*  data;
     };
 } DataNode;

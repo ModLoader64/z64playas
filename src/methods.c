@@ -1,5 +1,7 @@
 #include "z64playas.h"
 
+static void Raw_Error(const char* caller, const char* msg);
+
 void ZObject_WriteEntry(WrenVM* vm) {
     PlayAsState* state = wrenGetUserData(vm);
     ObjectNode* objNode;
@@ -91,6 +93,7 @@ void ZObject_BuildLutTable(WrenVM* vm) {
                             if (!Memfile_Write(&state->table.file, &offset, 4)) goto error;
                             break;
                         case TYPE_BRANCH:
+                        case TYPE_RAW:
                             info(
                                 "" PRNT_GRAY "\t%08X " PRNT_YELW "Branch: " PRNT_RSET "%08X " PRNT_GRAY "%s",
                                 ((state->table.file.seekPoint + state->table.offset) | state->segment << 24),
@@ -170,6 +173,46 @@ void ZObject_BuildLutTable(WrenVM* vm) {
                     if (!Memfile_Write(&state->table.file, &mtx64, sizeof(mtx64))) goto error;
                     
                     break;
+                case TYPE_RAW:
+                    info(
+                        "" PRNT_GRAY "\t%08X " PRNT_PRPL "Raw: " PRNT_RSET "0x%X bytes",
+                        ((state->table.file.seekPoint + state->table.offset) | state->segment << 24),
+                        dataNode->raw.size
+                    );
+                    
+                    for (u32 r = 0; r < dataNode->raw.refCount; r++) {
+                        const char* refName = dataNode->raw.refName[r];
+                        ObjectNode* ref = state->objNode;
+                        bool placed = true;
+                        u32 addr = 0;
+                        
+                        for (; ref; ref = ref->next) {
+                            if (!strcmp(ref->name, refName)) break;
+                            if (ref == objNode) placed = false;
+                        }
+                        
+                        if (ref == NULL || ref->data == NULL)
+                            Raw_Error(objNode->name, x_fmt("No entry named '%s' to take the address of.", refName));
+                        
+                        if (ref->data->type == TYPE_DICTIONARY)
+                            addr = ref->data->dict.offset;
+                        else if (placed && ref != objNode)
+                            addr = ref->offset;
+                        else
+                            Raw_Error(objNode->name, x_fmt("'%s' must be defined before this entry to take its address.", refName));
+                        
+                        u8* p = dataNode->raw.data + dataNode->raw.refPos[r];
+                        p[0] = addr >> 24; p[1] = addr >> 16; p[2] = addr >> 8; p[3] = addr;
+                        info("" PRNT_GRAY "\t         Address of " PRNT_RSET "%s" PRNT_GRAY " = " PRNT_RSET "%08X", refName, addr);
+                    }
+                    
+                    if (!Memfile_Write(&state->table.file, dataNode->raw.data, dataNode->raw.size)) goto error;
+                    
+                    if (!isLast && (dataNode->raw.size & 7)) {
+                        fprintf(stderr, "[" PRNT_YELW "Warning" PRNT_RSET "]\n");
+                        fprintf(stderr, "Raw data in '%s' is 0x%X bytes, not a multiple of 8; the commands after it will be misaligned.\n", objNode->name, dataNode->raw.size);
+                    }
+                    break;
                 case TYPE_MATRIX_OPERATION:
                     if (dataNode->mtxOp.pop) {
                         info("" PRNT_GRAY "\t%08X " PRNT_PRPL "MatrixPop();", ((state->table.file.seekPoint + state->table.offset) | state->segment << 24));
@@ -184,6 +227,11 @@ void ZObject_BuildLutTable(WrenVM* vm) {
             continue;
 error:
             errr("Ran out of space while writing '%s' to look-up table! Please increase table size!", objNode->name);
+        }
+        
+        while (state->table.file.seekPoint & 7) {
+            if (!Memfile_Write(&state->table.file, "\0", 1))
+                errr("Ran out of space while writing '%s' to look-up table! Please increase table size!", objNode->name);
         }
         
         if (setDataSize == state->table.file.seekPoint)
@@ -290,6 +338,123 @@ void ZObject_Branch(WrenVM* vm) {
         fprintf(stderr, "Make sure that it exists and it's defined before the entry that calls it.\n");
         exit(1);
     }
+}
+
+static s32 Raw_HexDigit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    
+    return -1;
+}
+
+static void Raw_Error(const char* caller, const char* msg) {
+    fprintf(stderr, "[" PRNT_REDD "Runtime Error!" PRNT_RSET "]\n");
+    fprintf(stderr, "\aobject.raw() in '" PRNT_YELW "%s" PRNT_RSET "': %s\n", caller, msg);
+    exit(1);
+}
+
+// object.raw("4D 4F 44 ...") or object.raw([0x4D, 0x4F, 0x44, ...])
+// Writes the bytes verbatim into the current look-up table entry.
+void ZObject_Raw(WrenVM* vm) {
+    PlayAsState* state = wrenGetUserData(vm);
+    ObjectNode* objNode = state->objNode;
+    DataNode* dataNode;
+    u8* data;
+    u32 size = 0;
+    u32 refCount = 0;
+    char** refName = NULL;
+    u32* refPos = NULL;
+    
+    while (objNode && objNode->next)
+        objNode = objNode->next;
+    
+    if (objNode == NULL || objNode->name == NULL)
+        Raw_Error("?", "No object.entry() to write into. Call object.entry(name) first.");
+    
+    switch (wrenGetSlotType(vm, 1)) {
+        case WREN_TYPE_STRING: {
+            const char* str = wrenGetSlotString(vm, 1);
+            s32 hi = -1;
+            
+            data = calloc(strlen(str) / 2 + 1);
+            
+            for (const char* c = str; *c; c++) {
+                s32 v;
+                
+                if (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r' || *c == ',')
+                    continue;
+                
+                if ((v = Raw_HexDigit(*c)) < 0)
+                    Raw_Error(objNode->name, "String contains a character that is not a hex digit.");
+                
+                if (hi < 0) {
+                    hi = v;
+                } else {
+                    data[size++] = (hi << 4) | v;
+                    hi = -1;
+                }
+            }
+            
+            if (hi >= 0)
+                Raw_Error(objNode->name, "String has an odd number of hex digits.");
+            break;
+        }
+        
+        case WREN_TYPE_LIST: {
+            s32 count = wrenGetListCount(vm, 1);
+            
+            data = calloc(count + 1);
+            wrenEnsureSlots(vm, 3);
+            
+            for (s32 i = 0; i < count; i++) {
+                double v;
+                
+                wrenGetListElement(vm, 1, i, 2);
+                if (wrenGetSlotType(vm, 2) == WREN_TYPE_STRING) {
+                    // Entry name: replaced by its 4-byte segment address when the table is built
+                    data = realloc(data, size + (count - i) + 4);
+                    refName = realloc(refName, sizeof(char*) * (refCount + 1));
+                    refPos = realloc(refPos, sizeof(u32) * (refCount + 1));
+                    refName[refCount] = strdup(wrenGetSlotString(vm, 2));
+                    refPos[refCount++] = size;
+                    memset(data + size, 0, 4);
+                    size += 4;
+                    continue;
+                }
+                if (wrenGetSlotType(vm, 2) != WREN_TYPE_NUM)
+                    Raw_Error(objNode->name, "List values must be numbers or entry names.");
+                
+                v = wrenGetSlotDouble(vm, 2);
+                if (v < 0 || v > 0xFF || v != (s32)v)
+                    Raw_Error(objNode->name, "List values must be whole numbers from 0x00 to 0xFF.");
+                
+                data[size++] = (u8)v;
+            }
+            break;
+        }
+        
+        default:
+            Raw_Error(objNode->name, "Expected a hex string or a list of byte values.");
+            return;
+    }
+    
+    if (size == 0) {
+        delete(data);
+        Raw_Error(objNode->name, "No bytes given.");
+    }
+    
+    dataNode = calloc(sizeof(*dataNode));
+    Node_Add(objNode->data, dataNode);
+    
+    dataNode->type = TYPE_RAW;
+    dataNode->raw.data = data;
+    dataNode->raw.size = size;
+    dataNode->raw.refCount = refCount;
+    dataNode->raw.refName = refName;
+    dataNode->raw.refPos = refPos;
+    
+    osLog("Raw: %d bytes", size);
 }
 
 void Patch_AdvanceBy(WrenVM* vm) {

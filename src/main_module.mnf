@@ -8,6 +8,7 @@ class ZObject {
     foreign popMtx()
     foreign pushMtx()
     foreign branch(item)
+    foreign raw(data)
     
     loadDictionary(list) {
         for (dict in list) {

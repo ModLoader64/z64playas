@@ -108,6 +108,9 @@ s32 main(s32 argc, const char* argv[]) {
                     case TYPE_BRANCH:
                         info("\t%s", subNode->branch);
                         break;
+                    case TYPE_RAW:
+                        info("\tRaw: 0x%X bytes", subNode->raw.size);
+                        break;
                     case TYPE_MATRIX:
                         info(
                             "\t%.0f %.0f %.0f / %.0f %.0f %.0f / %.0f %.0f %.0f",
@@ -159,6 +162,8 @@ s32 main(s32 argc, const char* argv[]) {
                 Memfile_Fmt(&header, "extern Gfx %s[];\n", varName, data->dict.offset);
                 
                 delete(varName);
+            } else if (data && data->type == TYPE_RAW) {
+                Memfile_Fmt(&header, "extern u8 %s[];\n", node->name);
             } else {
                 Memfile_Fmt(&header, "extern Gfx %s[];\n", node->name, node->offset);
             }

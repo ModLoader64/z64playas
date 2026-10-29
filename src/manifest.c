@@ -8,6 +8,7 @@ void ZObject_Mtx(WrenVM* vm);
 void ZObject_PopMtx(WrenVM* vm);
 void ZObject_PushMtx(WrenVM* vm);
 void ZObject_Branch(WrenVM* vm);
+void ZObject_Raw(WrenVM* vm);
 
 void Patch_AdvanceBy(WrenVM* vm);
 void Patch_Offset(WrenVM* vm);
@@ -113,6 +114,9 @@ Script_ForeignMethod(WrenVM* vm, const char* module, const char* className, bool
         
         if (!strcmp(signature, "branch(_)"))
             return ZObject_Branch;
+        
+        if (!strcmp(signature, "raw(_)"))
+            return ZObject_Raw;
     }
     
     if (!strcmp(className, "Patch")) {

@@ -9,7 +9,7 @@ static u32 PlayAs_FindObjectGroup(PlayAsState* state, const char* objGroupName) 
     
     plTbl += strlen("!PlayAsManifest0") + 2;
     
-    while (plTbl < state->mnfTable + state->mnfSize) {
+    while (plTbl < state->mnfTable + state->mnfSize && *plTbl) {
         char* str = plTbl;
         u32* val = (void*)(plTbl + strlen(plTbl) + 1);
         
@@ -29,10 +29,10 @@ void PlayAs_Process(PlayAsState* state) {
     ZObj bank;
     char* mnfTable = memmem(state->playas.data, state->playas.size, "!PlayAsManifest0", strlen("!PlayAsManifest0"));
     
-    state->mnfSize = mnfTable - state->playas.str;
     if (mnfTable == NULL)
         errr("No playas data found in '%s'", state->playas.info.name);
     
+    state->mnfSize = state->playas.size - (mnfTable - state->playas.str);
     state->mnfTable = memdup(mnfTable, state->mnfSize);
     state->playas.size -= state->mnfSize;
     
@@ -92,6 +92,11 @@ void PlayAs_Free(PlayAsState* state) {
                     break;
                 case TYPE_DICTIONARY:
                     delete(node->dict.object);
+                    break;
+                case TYPE_RAW:
+                    for (u32 r = 0; r < node->raw.refCount; r++)
+                        delete(node->raw.refName[r]);
+                    delete(node->raw.data, node->raw.refName, node->raw.refPos);
                     break;
             }
             
